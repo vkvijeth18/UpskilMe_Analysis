@@ -9,4 +9,4 @@ nltk
 cloudinary
 moviepy
 requests
-CORS
+flask-cors
