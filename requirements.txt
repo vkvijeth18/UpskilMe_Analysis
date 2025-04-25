@@ -1,0 +1,11 @@
+Flask
+librosa
+numpy
+textblob
+pymongo
+speechrecognition
+python-dotenv
+nltk
+cloudinary
+moviepy
+requests
