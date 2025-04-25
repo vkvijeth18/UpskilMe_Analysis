@@ -2,7 +2,14 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from analysis import analyze_video
 import os
+import nltk
 
+try:
+    nltk.data.find('tokenizers/punkt')
+    nltk.data.find('corpora/stopwords')
+except LookupError:
+    nltk.download('punkt')
+    nltk.download('stopwords')
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 

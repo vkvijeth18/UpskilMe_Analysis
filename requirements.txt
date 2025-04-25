@@ -1,5 +1,7 @@
 Flask
+flask-cors
 librosa
+moviepy
 numpy
 textblob
 pymongo
@@ -7,6 +9,4 @@ speechrecognition
 python-dotenv
 nltk
 cloudinary
-moviepy
 requests
-flask-cors
