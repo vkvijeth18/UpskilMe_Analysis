@@ -341,9 +341,8 @@ def analyze_video(video_url):
     """Comprehensive video analysis with improved metrics"""
     try:
         # Create temp directory for processing
-        temp_dir = "/tmp"  # ✅ Use Render's writable temp directory
+        temp_dir = os.path.join(os.getcwd(), "temp")
         os.makedirs(temp_dir, exist_ok=True)
-        
         # Generate unique filenames
         file_id = str(int(time.time()))
         video_path = os.path.join(temp_dir, f"video_{file_id}.mp4")
