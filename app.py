@@ -3,13 +3,23 @@ from flask_cors import CORS
 from analysis import analyze_video
 import os
 import nltk
+import textblob.download_corpora
 
+# Ensure NLTK data is available
 try:
     nltk.data.find('tokenizers/punkt')
     nltk.data.find('corpora/stopwords')
 except LookupError:
     nltk.download('punkt')
     nltk.download('stopwords')
+
+# Ensure TextBlob corpora are available
+try:
+    from textblob import TextBlob
+    _ = TextBlob("test").sentiment
+except Exception:
+    print("Downloading TextBlob corpora...")
+    textblob.download_corpora.download_all()
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
