@@ -345,7 +345,7 @@ def analyze_video(video_url):
         os.makedirs(temp_dir, exist_ok=True)
         # Generate unique filenames
         file_id = str(int(time.time()))
-        video_path = os.path.join(temp_dir, f"video_{file_id}.mp4")
+        video_path = os.path.join(temp_dir, f"video_{file_id}.webm")
         audio_path = os.path.join(temp_dir, f"audio_{file_id}.wav")
         
         # Download video
