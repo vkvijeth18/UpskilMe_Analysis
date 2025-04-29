@@ -30,21 +30,32 @@ except LookupError:
     nltk.download('stopwords')
     nltk.download('punkt')
 
-# MongoDB and Cloudinary setup
+# MongoDB setup
 MONGO_URI = os.getenv("MONGO_URI")
 if not MONGO_URI:
     logger.error("Missing MongoDB URI in environment variables")
     sys.exit(1)
 
+# Function to get fresh MongoDB connection
+def get_mongo_connection():
+    try:
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+        # Test the connection
+        client.server_info()
+        db = client["mockinterview"]
+        logger.info("Successfully connected to MongoDB")
+        return db
+    except Exception as e:
+        logger.error(f"Failed to connect to MongoDB: {e}")
+        return None
+
+# Initial MongoDB connection for validation
 try:
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    # Test the connection
-    client.server_info()
-    db = client["mockinterview"]
-    interview_col = db["interviews"]
-    logger.info("Successfully connected to MongoDB")
+    initial_db = get_mongo_connection()
+    if not initial_db:
+        sys.exit(1)
 except Exception as e:
-    logger.error(f"Failed to connect to MongoDB: {e}")
+    logger.error(f"Failed to make initial MongoDB connection: {e}")
     sys.exit(1)
 
 # Cloudinary configuration
@@ -95,7 +106,7 @@ def extract_audio_from_video(video_path, output_audio_path):
         return None
 
 def transcribe_audio(audio_file):
-    """Transcribe audio using Google Speech Recognition"""
+    """Transcribe audio using Google Speech Recognition with improved chunking"""
     if not os.path.exists(audio_file):
         logger.error(f"Audio file not found: {audio_file}")
         return ""
@@ -104,32 +115,51 @@ def transcribe_audio(audio_file):
     transcript = ""
     
     try:
+        # Load audio file for duration calculation
+        y, sr = librosa.load(audio_file)
+        audio_duration = librosa.get_duration(y=y, sr=sr)
+        
         # Split audio into smaller chunks for better recognition
-        with sr.AudioFile(audio_file) as source:
-            # Adjust for ambient noise
-            recognizer.adjust_for_ambient_noise(source)
-            
-            # Get audio duration - Fixed deprecated parameter
-            audio_duration = librosa.get_duration(path=audio_file)
-            chunk_duration = 30  # 30 seconds chunks
-            
-            if audio_duration <= chunk_duration:
+        chunk_duration = 30  # 30 seconds chunks
+        
+        if audio_duration <= chunk_duration:
+            # Process short audio in one go
+            with sr.AudioFile(audio_file) as source:
+                recognizer.adjust_for_ambient_noise(source)
                 audio_data = recognizer.record(source)
                 transcript = recognizer.recognize_google(audio_data)
-            else:
-                # Process in chunks
-                chunks = int(audio_duration / chunk_duration) + 1
-                for i in range(chunks):
-                    with sr.AudioFile(audio_file) as chunk_source:
-                        chunk_audio = recognizer.record(chunk_source, 
-                                                       duration=min(chunk_duration, 
-                                                                   audio_duration - i * chunk_duration))
+        else:
+            # Process in chunks with proper offsets
+            chunks = int(audio_duration / chunk_duration) + 1
+            for i in range(chunks):
+                offset = i * chunk_duration
+                duration = min(chunk_duration, audio_duration - offset)
+                
+                with sr.AudioFile(audio_file) as chunk_source:
+                    recognizer.adjust_for_ambient_noise(chunk_source)
+                    chunk_audio = recognizer.record(chunk_source, duration=duration)
+                    
+                    # Add retry logic for API calls
+                    max_retries = 3
+                    retry_count = 0
+                    backoff_time = 2
+                    
+                    while retry_count < max_retries:
                         try:
                             chunk_transcript = recognizer.recognize_google(chunk_audio)
                             transcript += " " + chunk_transcript
+                            break  # Success, exit retry loop
                         except sr.UnknownValueError:
                             logger.warning(f"Could not understand chunk {i+1}/{chunks}")
-                            continue
+                            break  # No retry for speech recognition failures
+                        except sr.RequestError as e:
+                            retry_count += 1
+                            if retry_count >= max_retries:
+                                logger.error(f"API error after {max_retries} retries: {e}")
+                                break
+                            logger.warning(f"API error (attempt {retry_count}): {e}. Retrying in {backoff_time}s...")
+                            time.sleep(backoff_time)
+                            backoff_time *= 2  # Exponential backoff
         
         logger.info(f"Transcription successful: {len(transcript)} characters")
         return transcript.strip()
@@ -169,7 +199,9 @@ def count_filler_words(transcript):
         multi_word_count += transcript.lower().count(phrase)
     
     total_count = single_word_count + multi_word_count
-    total_words = len(words)
+    
+    # Count actual words (excluding non-word elements)
+    total_words = len(re.findall(r'\b\w+\b', transcript))
     
     # Calculate filler word rate (percentage)
     filler_rate = (total_count / total_words) * 100 if total_words > 0 else 0
@@ -195,7 +227,7 @@ def analyze_emotion(transcript):
             return {"emotion": "neutral", "polarity": 0, "subjectivity": 0}
             
         polarities = [sentence.sentiment.polarity for sentence in sentences]
-        avg_polarity = sum(polarities) / len(polarities)
+        avg_polarity = sum(polarities) / len(polarities) if polarities else 0
         
         subjectivity = full_analysis.sentiment.subjectivity
         
@@ -228,24 +260,27 @@ def analyze_emotion(transcript):
         return {"emotion": "unknown", "polarity": 0, "subjectivity": 0}
 
 def analyze_speech_rate(transcript, audio_duration):
-    """Analyze speaking rate (words per minute)"""
+    """Analyze speaking rate (words per minute) with improved word counting"""
     if not transcript or audio_duration <= 0:
         return 0
-        
-    words = len(transcript.split())
+    
+    # Count actual words (excluding non-word elements)
+    words = len(re.findall(r'\b\w+\b', transcript))
     minutes = audio_duration / 60
     wpm = words / minutes if minutes > 0 else 0
     
     return round(wpm, 1)
 
 def analyze_voice_features(audio_file):
-    """Analyze voice features including pitch, energy, and pauses"""
+    """Analyze voice features including pitch, energy, and pauses with memory limits"""
     try:
         if not os.path.exists(audio_file):
             logger.error(f"Audio file not found: {audio_file}")
             return {}
-            
-        y, sr = librosa.load(audio_file)
+        
+        # Limit analysis to first minute to avoid memory issues with large files    
+        MAX_DURATION = 60  # seconds
+        y, sr = librosa.load(audio_file, duration=MAX_DURATION)
         
         # Pitch analysis
         pitch, mag = librosa.piptrack(y=y, sr=sr)
@@ -260,15 +295,16 @@ def analyze_voice_features(audio_file):
             pitch_std = np.std(pitch_valid)
         
         # Energy/volume analysis
-        energy = np.sum(y**2) / len(y)
+        energy = np.sum(y**2) / len(y) if len(y) > 0 else 0
         
         # Detect pauses (silence)
         intervals = librosa.effects.split(y, top_db=20)
         total_silence = (len(y) - sum(i[1] - i[0] for i in intervals)) / sr
-        silence_ratio = total_silence / (len(y) / sr)
+        silence_ratio = total_silence / (len(y) / sr) if len(y) > 0 else 0
         
         # Speaking variability (pitch variation - good indicator of engagement)
-        pitch_variability = pitch_std / avg_pitch if avg_pitch > 0 else 0
+        # Fix potential division by zero
+        pitch_variability = pitch_std / avg_pitch if avg_pitch > 0 and pitch_std > 0 else 0
         
         # Map features to confidence indicators
         confidence_score = min(10, max(0, 5 + 
@@ -307,11 +343,11 @@ def analyze_clarity(transcript):
             
         # Calculate average sentence length
         sentence_lengths = [len(str(sentence).split()) for sentence in sentences]
-        avg_length = sum(sentence_lengths) / len(sentence_lengths)
+        avg_length = sum(sentence_lengths) / len(sentence_lengths) if sentence_lengths else 0
         
         # Count complex sentences (sentences with more than 20 words)
         complex_sentences = sum(1 for length in sentence_lengths if length > 20)
-        complex_ratio = complex_sentences / len(sentences)
+        complex_ratio = complex_sentences / len(sentences) if sentences else 0
         
         # Lexical diversity (unique words / total words)
         words = transcript.lower().split()
@@ -338,16 +374,17 @@ def analyze_clarity(transcript):
 
 
 def analyze_video(video_url):
-    """Comprehensive video analysis with improved metrics"""
+    """Comprehensive video analysis with improved metrics and file management"""
+    # Create temp directory for processing
+    temp_dir = os.path.join(os.getcwd(), "temp")
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    # Generate unique filenames
+    file_id = str(int(time.time()))
+    video_path = os.path.join(temp_dir, f"video_{file_id}.webm")
+    audio_path = os.path.join(temp_dir, f"audio_{file_id}.wav")
+    
     try:
-        # Create temp directory for processing
-        temp_dir = os.path.join(os.getcwd(), "temp")
-        os.makedirs(temp_dir, exist_ok=True)
-        # Generate unique filenames
-        file_id = str(int(time.time()))
-        video_path = os.path.join(temp_dir, f"video_{file_id}.webm")
-        audio_path = os.path.join(temp_dir, f"audio_{file_id}.wav")
-        
         # Download video
         downloaded_video = download_video_from_url(video_url, video_path)
         if not downloaded_video:
@@ -358,8 +395,9 @@ def analyze_video(video_url):
         if not extracted_audio:
             return {"error": "Failed to extract audio"}
         
-        # Get audio duration - Fixed deprecated parameter
-        audio_duration = librosa.get_duration(path=audio_path)
+        # Get audio duration with fixed parameter usage
+        y, sr = librosa.load(audio_path)
+        audio_duration = librosa.get_duration(y=y, sr=sr)
         
         # Transcribe audio
         logger.info("Starting transcription...")
@@ -455,13 +493,6 @@ def analyze_video(video_url):
         if recommendations:
             summary += "\n\nRecommendations:\n" + "\n".join(f"• {r}" for r in recommendations)
         
-        # Clean up temporary files
-        try:
-            os.remove(video_path)
-            os.remove(audio_path)
-        except Exception as e:
-            logger.warning(f"Error cleaning up temporary files: {e}")
-        
         # Detailed result
         analysis_result = {
             "score": final_score,
@@ -482,10 +513,43 @@ def analyze_video(video_url):
     except Exception as e:
         logger.error(f"Analysis error: {e}")
         return {"error": f"Analysis failed: {str(e)}"}
+    finally:
+        # Clean up temporary files
+        for path in [video_path, audio_path]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                    logger.info(f"Removed temporary file: {path}")
+                except Exception as e:
+                    logger.warning(f"Error removing temporary file {path}: {e}")
+
+def extract_public_id_from_url(video_url):
+    """Extract Cloudinary public ID from URL with robust pattern matching"""
+    try:
+        # Try to extract using regex pattern
+        match = re.search(r'/v\d+/([^/]+/[^.]+)', video_url)
+        if match:
+            return match.group(1)
+        
+        # Fallback to simple path extraction
+        parts = video_url.split("/")
+        public_id_parts = parts[-1].split(".")
+        return "/".join(["interview_videos", public_id_parts[0]])
+    except Exception as e:
+        logger.error(f"Error extracting public ID: {e}")
+        return None
 
 def process_pending_interviews():
     """Process pending interviews with error handling and retries"""
     try:
+        # Get fresh connection for thread safety
+        db = get_mongo_connection()
+        if not db:
+            logger.error("Failed to connect to database")
+            return
+            
+        interview_col = db["interviews"]
+            
         # Find interviews that need processing
         pending_interviews = interview_col.find({"status": "Processing"})
         count = interview_col.count_documents({"status": "Processing"})
@@ -525,13 +589,10 @@ def process_pending_interviews():
                 # Delete video from Cloudinary if it's stored there
                 if "cloudinary" in video_url.lower():
                     try:
-                        # Extract public_id from URL
-                        parts = video_url.split("/")
-                        public_id_parts = parts[-1].split(".")
-                        public_id = "/".join(["interview_videos", public_id_parts[0]])
-                        
-                        result = cloudinary.uploader.destroy(public_id, resource_type="video")
-                        logger.info(f"Cloudinary deletion result: {result}")
+                        public_id = extract_public_id_from_url(video_url)
+                        if public_id:
+                            result = cloudinary.uploader.destroy(public_id, resource_type="video")
+                            logger.info(f"Cloudinary deletion result: {result}")
                     except Exception as e:
                         logger.error(f"Cloudinary deletion error: {e}")
                 
@@ -561,17 +622,19 @@ def process_pending_interviews():
 if __name__ == "__main__":
     logger.info("Starting interview analysis service")
     
-    # Check if we're being called from Node.js with command line args
-    if len(sys.argv) > 1:
-        video_url = sys.argv[1]
-        interview_id = sys.argv[2] if len(sys.argv) > 2 else None
-        
-        logger.info(f"Processing single video: {video_url}")
-        result = analyze_video(video_url)
-        # Print the JSON result for Node.js to capture
-        print(json.dumps((result)))
-    else:
-        # Process pending interviews from the database
-        process_pending_interviews()
-    
-    logger.info("Interview analysis service completed")
+    try:
+        # Check if we're being called from Node.js with command line args
+        if len(sys.argv) > 1:
+            video_url = sys.argv[1]
+            logger.info(f"Processing single video: {video_url}")
+            result = analyze_video(video_url)
+            # Print the JSON result for Node.js to capture
+            print(json.dumps(result))
+        else:
+            # Process pending interviews from the database
+            process_pending_interviews()
+            
+        logger.info("Interview analysis service completed")
+    except Exception as e:
+        logger.error(f"Fatal error in main process: {e}")
+        sys.exit(1)
