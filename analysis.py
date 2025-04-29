@@ -52,11 +52,13 @@ def get_mongo_connection():
 # Initial MongoDB connection for validation
 try:
     initial_db = get_mongo_connection()
-    if not initial_db:
+    if initial_db is None:
         sys.exit(1)
 except Exception as e:
     logger.error(f"Failed to make initial MongoDB connection: {e}")
     sys.exit(1)
+
+
 
 # Cloudinary configuration
 try:
