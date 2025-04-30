@@ -397,9 +397,13 @@ def analyze_video(video_url):
         if not extracted_audio:
             return {"error": "Failed to extract audio"}
         
-        # Get audio duration with fixed parameter usage
-        y, sr = librosa.load(audio_path)
-        audio_duration = librosa.get_duration(y=y, sr=sr)
+        # Get audio duration with fixed parameter usage and proper error handling
+        try:
+            y, sr = librosa.load(audio_path)
+            audio_duration = librosa.get_duration(y=y, sr=sr)
+        except Exception as e:
+            logger.error(f"Error loading audio file: {e}")
+            return {"error": f"Failed to analyze audio: {str(e)}"}
         
         # Transcribe audio
         logger.info("Starting transcription...")
