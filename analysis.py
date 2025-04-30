@@ -27,8 +27,28 @@ load_dotenv()
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
+    logger.info("Downloading NLTK stopwords...")
     nltk.download('stopwords')
+    logger.info("Downloading NLTK punkt...")
     nltk.download('punkt')
+
+# Ensure TextBlob corpora is available
+try:
+    logger.info("Checking for TextBlob corpora...")
+    import textblob.download_corpora
+    textblob.download_corpora.download_all()
+    logger.info("TextBlob corpora download completed")
+except Exception as e:
+    logger.warning(f"Error downloading TextBlob corpora: {e}")
+    logger.info("Attempting alternative download method...")
+    try:
+        import subprocess
+        logger.info("Running TextBlob download command...")
+        subprocess.run([sys.executable, "-m", "textblob.download_corpora"], check=True)
+        logger.info("TextBlob corpora download completed")
+    except Exception as e:
+        logger.error(f"Failed to download TextBlob corpora: {e}")
+        logger.warning("Some text analysis features may not work correctly")
 
 # MongoDB and Cloudinary setup
 MONGO_URI = os.getenv("MONGO_URI")
@@ -299,6 +319,13 @@ def analyze_clarity(transcript):
         return {"score": 0, "avg_sentence_length": 0, "complex_sentences": 0, "lexical_diversity": 0}
         
     try:
+        # Make sure TextBlob's dependencies are available
+        try:
+            import nltk
+            nltk.data.find('tokenizers/punkt')
+        except LookupError:
+            nltk.download('punkt')
+        
         analysis = TextBlob(transcript)
         sentences = analysis.sentences
         
@@ -334,6 +361,9 @@ def analyze_clarity(transcript):
         }
     except Exception as e:
         logger.error(f"Error in clarity analysis: {e}")
+        # Provide more helpful error info
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"score": 0, "avg_sentence_length": 0, "complex_sentences": 0, "lexical_diversity": 0}
 
 
@@ -482,6 +512,9 @@ def analyze_video(video_url):
     
     except Exception as e:
         logger.error(f"Analysis error: {e}")
+        # Add more detailed error logging
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {"error": f"Analysis failed: {str(e)}"}
 
 def process_pending_interviews():
