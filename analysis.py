@@ -118,8 +118,8 @@ def transcribe_audio(audio_file):
     
     try:
         # Load audio file for duration calculation
-        y, sr = librosa.load(audio_file)
-        audio_duration = librosa.get_duration(y=y, sr=sr)
+        y, sample_rate = librosa.load(audio_file)
+        audio_duration = librosa.get_duration(y=y, sr=sample_rate)
         
         # Split audio into smaller chunks for better recognition
         chunk_duration = 30  # 30 seconds chunks
@@ -282,10 +282,10 @@ def analyze_voice_features(audio_file):
         
         # Limit analysis to first minute to avoid memory issues with large files    
         MAX_DURATION = 60  # seconds
-        y, sr = librosa.load(audio_file, duration=MAX_DURATION)
+        y, sample_rate = librosa.load(audio_file, duration=MAX_DURATION)
         
         # Pitch analysis
-        pitch, mag = librosa.piptrack(y=y, sr=sr)
+        pitch, mag = librosa.piptrack(y=y, sr=sample_rate)
         pitch_valid = pitch[pitch > 0]
         
         # Handle potential empty arrays
@@ -399,8 +399,8 @@ def analyze_video(video_url):
         
         # Get audio duration with fixed parameter usage and proper error handling
         try:
-            y, sr = librosa.load(audio_path)
-            audio_duration = librosa.get_duration(y=y, sr=sr)
+            y, sample_rate = librosa.load(audio_path)
+            audio_duration = librosa.get_duration(y=y, sr=sample_rate)
         except Exception as e:
             logger.error(f"Error loading audio file: {e}")
             return {"error": f"Failed to analyze audio: {str(e)}"}
