@@ -25,7 +25,11 @@ CORS(app)  # Enable CORS for all routes
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Interview Analyzer API is running."
+     return "pong", 200
+
+@app.route("/ping",methods=["GET"])
+def ping():
+    return "Server is Up & Running."
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
